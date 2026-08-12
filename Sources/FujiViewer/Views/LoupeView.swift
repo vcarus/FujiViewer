@@ -282,6 +282,7 @@ struct ZoomCommand: Equatable {
         case none
         case toggle
         case fit
+        case actualSize
     }
 
     var kind: Kind = .none
@@ -327,6 +328,7 @@ struct ZoomableImageView: NSViewRepresentable {
         switch command.kind {
         case .toggle: nsView.toggleZoom()
         case .fit: nsView.zoomToFit(animated: true)
+        case .actualSize: nsView.zoomToActualSize()
         case .none: break
         }
     }
@@ -542,6 +544,11 @@ final class ZoomableScrollView: NSScrollView {
 
     func zoomToFit(animated: Bool) {
         applyMagnification(fitMagnification, animated: animated, centeredAt: nil)
+    }
+
+    /// 100% regardless of the current level, centred on the remembered anchor like Space is.
+    func zoomToActualSize() {
+        applyMagnification(maxMagnification, animated: true, centeredAt: anchorPoint())
     }
 
     private func applyMagnification(_ value: CGFloat, animated: Bool, centeredAt point: NSPoint?) {

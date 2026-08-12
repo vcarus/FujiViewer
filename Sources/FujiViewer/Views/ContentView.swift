@@ -54,6 +54,10 @@ final class ViewerState {
     func requestZoomToFit() {
         zoomCommand = ZoomCommand(kind: .fit, token: zoomCommand.token + 1)
     }
+
+    func requestActualSize() {
+        zoomCommand = ZoomCommand(kind: .actualSize, token: zoomCommand.token + 1)
+    }
 }
 
 struct ContentView: View {

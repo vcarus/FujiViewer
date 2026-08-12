@@ -14,6 +14,9 @@ struct FujiViewerApp: App {
         // `swift run` starts an unbundled binary: without a regular activation policy there is no
         // window in the Dock and the process never becomes key, so no keyboard events arrive.
         NSApplication.shared.setActivationPolicy(.regular)
+        // A single-window viewer has no use for tabs, and this also drops the automatic
+        // "Show Tab Bar" / "Show All Tabs" items from the View menu.
+        NSWindow.allowsAutomaticWindowTabbing = false
     }
 
     var body: some Scene {
@@ -200,22 +203,23 @@ struct FujiViewerApp: App {
 
         Divider()
 
-        Button("Toggle Zoom") {
-            guard ui.mainWindowIsQuiet() else { return }
-            if ui.mode == .grid {
-                ui.mode = .loupe
-            } else {
-                ui.requestZoomToggle()
-            }
-        }
-        .keyboardShortcut(.space, modifiers: [])
-        .disabled(photoKeysBlocked)
-
         // Escape does this too, but only through the key monitor, which no menu can show.
         Button("Zoom to Fit") {
             ui.requestZoomToFit()
         }
         .keyboardShortcut("0", modifiers: .command)
+        .disabled(library.photos.isEmpty)
+
+        // Space toggles fit ↔ 100% through the key monitor; a bare-space key equivalent renders
+        // as the word "Space" in the menu, so the menu speaks Preview's dialect instead.
+        Button("Actual Size") {
+            if ui.mode == .grid {
+                ui.mode = .loupe
+            } else {
+                ui.requestActualSize()
+            }
+        }
+        .keyboardShortcut("1", modifiers: .command)
         .disabled(library.photos.isEmpty)
 
         Toggle("Lock Zoom & Position", isOn: Binding(

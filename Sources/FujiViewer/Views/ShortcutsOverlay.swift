@@ -28,6 +28,7 @@ struct ShortcutsOverlay: View {
             (["Drag"], "Pan while zoomed in"),
             (["Z"], "Lock zoom & position"),
             (["⌘0"], "Zoom to fit"),
+            (["⌘1"], "Actual size (100%)"),
             (["⎋"], "Zoom to fit, unlock"),
         ]),
         ShortcutGroup(title: "Mark & Cull", entries: [

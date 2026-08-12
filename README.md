@@ -68,6 +68,7 @@ too; a single image file opens its folder and selects it.
 | Drag | Pan while zoomed in |
 | Z | Lock zoom & position |
 | ⌘0 | Zoom to fit |
+| ⌘1 | Actual size (100%) |
 | ⎋ | Zoom to fit, unlock |
 | F | Toggle heart |
 | L | Marked only |
