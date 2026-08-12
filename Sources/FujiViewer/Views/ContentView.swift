@@ -190,7 +190,7 @@ struct ContentView: View {
             }
             return nil
         case 51, 117: // delete, forward delete
-            library.deleteCurrent()
+            confirmDelete()
             return nil
         case 53: // escape
             if ui.mode == .loupe, ui.isZoomedIn {
@@ -230,6 +230,29 @@ struct ContentView: View {
             return nil
         }
         return nil
+    }
+
+    // MARK: Deleting
+
+    /// Window-modal confirmation: Return activates "Move to Trash", Escape cancels. While the
+    /// sheet is key the local monitor passes keys through, so both just work.
+    private func confirmDelete() {
+        guard let photo = library.currentPhoto, let window = ui.window else { return }
+        guard window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Move \u{201C}\(photo.name)\u{201D} to the Trash?"
+        alert.informativeText = library.isCurrentMarked
+            ? "This photo is marked with a heart. You can put it back from the Trash."
+            : "You can put it back from the Trash."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            // Delete what the alert named, not whatever is current by now.
+            guard library.currentPhoto?.url == photo.url else { return }
+            library.deleteCurrent()
+        }
     }
 }
 
