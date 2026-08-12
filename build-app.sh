@@ -25,6 +25,13 @@ mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/$APP_NAME"
 
+echo "==> rendering AppIcon.icns"
+ICONSET_DIR="$BIN_DIR/AppIcon.iconset"
+rm -rf "$ICONSET_DIR"
+swift Icon/make-icon.swift "$ICONSET_DIR"
+iconutil -c icns "$ICONSET_DIR" -o "$BIN_DIR/AppIcon.icns"
+cp "$BIN_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
+
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -34,6 +41,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 	<string>en</string>
 	<key>CFBundleExecutable</key>
 	<string>$APP_NAME</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>$BUNDLE_ID</string>
 	<key>CFBundleInfoDictionaryVersion</key>

@@ -54,6 +54,9 @@ final class PhotoLibrary {
 
     var markedCount: Int { marked.count }
 
+    /// Every marked photo in folder order, regardless of the current filter.
+    var markedPhotos: [Photo] { allPhotos.filter { marked.contains($0.name) } }
+
     var isCurrentMarked: Bool {
         guard let photo = currentPhoto else { return false }
         return marked.contains(photo.name)

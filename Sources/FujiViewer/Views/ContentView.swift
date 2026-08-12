@@ -13,6 +13,7 @@ final class ViewerState {
     var mode: ViewMode = .loupe
     var showExif = false
     var gridColumns = 5
+    var showExportSheet = false
 
     /// One-shot zoom request handed to the loupe's scroll view.
     var zoomCommand = ZoomCommand()
@@ -37,12 +38,15 @@ final class ViewerState {
 
 struct ContentView: View {
     let library: PhotoLibrary
+    let ui: ViewerState
 
-    @State private var ui = ViewerState()
     @State private var isDropTargeted = false
     @State private var keyMonitor: Any?
 
     var body: some View {
+        // `ui` is owned by the app scene so the menu commands can reach it; `@Bindable` is what
+        // gives this view a binding into it.
+        @Bindable var ui = ui
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -94,6 +98,9 @@ struct ContentView: View {
             window.backgroundColor = .black
         })
         .navigationTitle(library.windowTitle)
+        .sheet(isPresented: $ui.showExportSheet) {
+            ExportSheet(library: library)
+        }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
         .onAppear {
             installKeyMonitor()

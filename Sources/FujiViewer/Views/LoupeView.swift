@@ -166,7 +166,10 @@ struct LoupeView: View {
         let requiredPixels = max(native.width, native.height) * status.magnification
         let hqCeiling = CGFloat(ImageLevel.hq.maxPixelSize)
 
-        if requiredPixels > hqCeiling * 1.05 {
+        // Fit view is always served by the 2560px bitmap: without the `isFitted` guard a large
+        // window on a Retina screen already "requires" ~3000px at fit, so every photo switch would
+        // run a 40MP decode.
+        if !status.isFitted && requiredPixels > hqCeiling * 1.05 {
             requestFull(for: displayed.url)
         } else if displayed.image.level == .full {
             releaseFull(for: displayed.url)

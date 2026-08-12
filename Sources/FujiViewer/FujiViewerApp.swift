@@ -5,6 +5,9 @@ import SwiftUI
 struct FujiViewerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    /// Owned here rather than by `ContentView` so the menu commands can reach it.
+    @State private var ui = ViewerState()
+
     private var library: PhotoLibrary { .shared }
 
     init() {
@@ -15,7 +18,7 @@ struct FujiViewerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(library: library)
+            ContentView(library: library, ui: ui)
                 .frame(minWidth: 720, minHeight: 480)
                 .preferredColorScheme(.dark)
         }
@@ -26,6 +29,25 @@ struct FujiViewerApp: App {
                     library.presentOpenPanel()
                 }
                 .keyboardShortcut("o", modifiers: .command)
+
+                Divider()
+
+                Button("Export Marked Photos…") {
+                    ui.showExportSheet = true
+                }
+                .keyboardShortcut("e", modifiers: .command)
+                .disabled(library.markedCount == 0)
+            }
+            CommandGroup(after: .sidebar) {
+                // Plain "G" already toggles this in the key monitor; ⌘ events pass through it.
+                Toggle("Grid View", isOn: Binding(
+                    get: { ui.mode == .grid },
+                    set: { isGrid in
+                        ui.mode = isGrid ? .grid : .loupe
+                        ui.zoomStatus = nil
+                    }))
+                .keyboardShortcut("g", modifiers: .command)
+                .disabled(library.photos.isEmpty)
             }
         }
     }

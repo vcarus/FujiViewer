@@ -275,8 +275,14 @@ final class ImagePipeline: @unchecked Sendable {
     private var generation = 0
     /// Native-resolution bitmaps are ~160MB each, so only the current one is kept.
     private var fullImage: (key: String, image: DecodedImage)?
+    /// Pending thumbnail requests, newest last; drained from the back.
+    private var thumbStack: [(url: URL, key: String)] = []
+    private var thumbWorkers = 0
 
-    private let thumbQueue = ImagePipeline.makeQueue("thumb", concurrency: 4, qos: .utility)
+    /// Thumbnail queue width, and with it the number of stack-draining workers.
+    private static let thumbConcurrency = 4
+
+    private let thumbQueue = ImagePipeline.makeQueue("thumb", concurrency: ImagePipeline.thumbConcurrency, qos: .utility)
     private let previewQueue = ImagePipeline.makeQueue("preview", concurrency: 4, qos: .userInitiated)
     private let hqQueue = ImagePipeline.makeQueue("hq", concurrency: 2, qos: .utility)
     private let fullQueue = ImagePipeline.makeQueue("full", concurrency: 1, qos: .userInitiated)
@@ -382,11 +388,43 @@ final class ImagePipeline: @unchecked Sendable {
         lock.unlock()
 
         guard shouldEnqueue else { return }
+        guard level != .thumb else {
+            enqueueThumb(url: url, key: key)
+            return
+        }
         let operation = BlockOperation { [weak self] in
             self?.performDecode(url: url, level: level, key: key)
         }
         operation.queuePriority = priority
         queue(for: level).addOperation(operation)
+    }
+
+    /// Thumbnails are drained newest-first, so the cells scrolling into view beat the backlog a
+    /// fast scroll left behind.
+    private func enqueueThumb(url: URL, key: String) {
+        lock.lock()
+        thumbStack.append((url, key))
+        let needsWorker = thumbWorkers < ImagePipeline.thumbConcurrency
+        if needsWorker { thumbWorkers += 1 }
+        lock.unlock()
+
+        guard needsWorker else { return }
+        thumbQueue.addOperation { [weak self] in
+            self?.drainThumbStack()
+        }
+    }
+
+    private func drainThumbStack() {
+        while true {
+            lock.lock()
+            guard let request = thumbStack.popLast() else {
+                thumbWorkers -= 1
+                lock.unlock()
+                return
+            }
+            lock.unlock()
+            performDecode(url: request.url, level: .thumb, key: request.key)
+        }
     }
 
     private func performDecode(url: URL, level: ImageLevel, key: String) {
