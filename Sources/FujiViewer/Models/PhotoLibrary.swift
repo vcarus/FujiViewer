@@ -30,20 +30,45 @@ final class PhotoLibrary {
     private(set) var filterMarkedOnly = false
     private(set) var currentIndex = 0
     private(set) var statusMessage: String?
+    /// Folders opened before, newest first.
+    private(set) var recentFolders: [URL] = []
+    /// Observed by the menu: a bare-key equivalent must not fire while the panel owns the keyboard.
+    private(set) var isPresentingOpenPanel = false
+
+    /// One entry per photo this session moved to the Trash, oldest first.
+    private var trashed: [TrashedPhoto] = []
 
     /// Direction of the last move, used to bias prefetching.
     @ObservationIgnored private(set) var lastDirection = 1
     /// Timestamp of the key press that caused the current selection change.
     @ObservationIgnored private var navigationStart: CFAbsoluteTime?
     @ObservationIgnored private var marksStore: MarksStore?
-    @ObservationIgnored private var isPresentingOpenPanel = false
     @ObservationIgnored private var statusClearWork: DispatchWorkItem?
+    @ObservationIgnored private var folderSource: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var rescanWork: DispatchWorkItem?
+
+    private struct TrashedPhoto {
+        let original: URL
+        let inTrash: URL
+        let wasMarked: Bool
+    }
+
+    private static let recentFoldersKey = "RecentFolders"
+    /// Undo is session-only, so the stack just needs a sane ceiling.
+    private static let maxTrashUndo = 50
+    private static let maxRecentFolders = 10
 
     init() {
+        recentFolders = (UserDefaults.standard.array(forKey: PhotoLibrary.recentFoldersKey) as? [String] ?? [])
+            .map { URL(fileURLWithPath: $0) }
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             self?.marksStore?.flush()
         }
+    }
+
+    deinit {
+        folderSource?.cancel()
     }
 
     // MARK: Derived state
@@ -61,6 +86,8 @@ final class PhotoLibrary {
         guard let photo = currentPhoto else { return false }
         return marked.contains(photo.name)
     }
+
+    var canUndoDelete: Bool { !trashed.isEmpty }
 
     var windowTitle: String {
         guard folder != nil else { return "FujiViewer" }
@@ -95,6 +122,36 @@ final class PhotoLibrary {
         }
     }
 
+    /// Recent entries go stale often here — a card gets ejected, a shoot folder gets renamed — so
+    /// a dead one reports itself and drops off the list instead of opening an empty window.
+    func openRecent(_ url: URL) {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            recentFolders.removeAll { $0.path == url.path }
+            saveRecentFolders()
+            showStatus("\(url.lastPathComponent) is not there any more")
+            return
+        }
+        open(folder: url)
+    }
+
+    func clearRecentFolders() {
+        recentFolders = []
+        UserDefaults.standard.removeObject(forKey: PhotoLibrary.recentFoldersKey)
+    }
+
+    private func rememberRecentFolder(_ url: URL) {
+        var list = recentFolders.filter { $0.path != url.path }
+        list.insert(url, at: 0)
+        recentFolders = Array(list.prefix(PhotoLibrary.maxRecentFolders))
+        saveRecentFolders()
+    }
+
+    private func saveRecentFolders() {
+        UserDefaults.standard.set(recentFolders.map(\.path), forKey: PhotoLibrary.recentFoldersKey)
+    }
+
     /// Handles a dropped folder, or a dropped image file (opens its folder and selects it).
     func openDropped(_ url: URL) {
         var isDirectory: ObjCBool = false
@@ -117,6 +174,8 @@ final class PhotoLibrary {
         folder = url
         marked = store.load()
         filterMarkedOnly = false
+        // The entries name files in the folder being left behind.
+        trashed = []
         allPhotos = PhotoLibrary.scan(folder: url)
         rebuildVisiblePhotos()
 
@@ -127,6 +186,9 @@ final class PhotoLibrary {
         }
         lastDirection = 1
         navigationStart = CFAbsoluteTimeGetCurrent()
+
+        rememberRecentFolder(url)
+        startWatching(url)
 
         if allPhotos.isEmpty {
             showStatus("No photos in \(url.lastPathComponent)")
@@ -145,6 +207,87 @@ final class PhotoLibrary {
             .filter { supportedExtensions.contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             .map(Photo.init(url:))
+    }
+
+    // MARK: Watching
+
+    /// Keeps the list in step with the folder while the app is open (a card being copied in, files
+    /// deleted in the Finder). The descriptor is `O_EVTONLY`, so it does not keep the volume busy.
+    private func startWatching(_ url: URL) {
+        stopWatching()
+        let descriptor = Darwin.open(url.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor,
+                                                               eventMask: [.write, .rename, .delete, .link],
+                                                               queue: .main)
+        source.setEventHandler { [weak self] in self?.scheduleRescan() }
+        source.setCancelHandler { Darwin.close(descriptor) }
+        folderSource = source
+        source.resume()
+    }
+
+    private func stopWatching() {
+        rescanWork?.cancel()
+        rescanWork = nil
+        folderSource?.cancel()
+        folderSource = nil
+    }
+
+    /// A card copy fires an event per file; one rescan after things settle is enough.
+    private func scheduleRescan() {
+        rescanWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.rescanFolder() }
+        rescanWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func rescanFolder() {
+        guard let url = folder else { return }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            // Keep the (now stale) list on screen rather than emptying the window.
+            stopWatching()
+            showStatus("Folder was removed")
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            let scanned = PhotoLibrary.scan(folder: url)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.folder == url else { return }
+                self.apply(scanned: scanned)
+            }
+        }
+    }
+
+    /// Our own trashing, mark saves and restores all fire events after the list was already
+    /// updated, so the common case is an empty diff and no status at all.
+    private func apply(scanned: [Photo]) {
+        let oldNames = allPhotos.map(\.name)
+        let newNames = scanned.map(\.name)
+        guard oldNames != newNames else { return }
+
+        let removed = Set(oldNames).subtracting(newNames)
+        for photo in allPhotos where removed.contains(photo.name) {
+            ImagePipeline.shared.forget(photo.url)
+        }
+
+        let anchor = currentPhoto
+        allPhotos = scanned
+        if !removed.isEmpty {
+            let before = marked.count
+            marked.subtract(removed)
+            if marked.count != before { marksStore?.scheduleSave(marked) }
+        }
+
+        let wasFiltering = filterMarkedOnly
+        rebuildVisiblePhotos()
+        if wasFiltering && photos.isEmpty {
+            filterMarkedOnly = false
+            rebuildVisiblePhotos()
+        }
+        currentIndex = remapIndex(anchor: anchor)
+        showStatus("Folder changed — \(allPhotos.count) photos")
     }
 
     // MARK: Navigation
@@ -243,11 +386,17 @@ final class PhotoLibrary {
 
     func deleteCurrent() {
         guard let photo = currentPhoto else { return }
+        let wasMarked = marked.contains(photo.name)
+        var inTrash: NSURL?
         do {
-            try FileManager.default.trashItem(at: photo.url, resultingItemURL: nil)
+            try FileManager.default.trashItem(at: photo.url, resultingItemURL: &inTrash)
         } catch {
             showStatus("Could not trash \(photo.name): \(error.localizedDescription)")
             return
+        }
+        if let inTrash = inTrash as URL? {
+            trashed.append(TrashedPhoto(original: photo.url, inTrash: inTrash, wasMarked: wasMarked))
+            if trashed.count > PhotoLibrary.maxTrashUndo { trashed.removeFirst() }
         }
         ImagePipeline.shared.forget(photo.url)
         allPhotos.removeAll { $0.url == photo.url }
@@ -264,6 +413,61 @@ final class PhotoLibrary {
         navigationStart = CFAbsoluteTimeGetCurrent()
         currentIndex = min(currentIndex, max(0, photos.count - 1))
         showStatus("Moved \(photo.name) to Trash")
+    }
+
+    /// Moves the most recently trashed photo back and selects it again.
+    func undoDelete() {
+        guard let entry = trashed.popLast() else { return }
+        let name = entry.original.lastPathComponent
+        let manager = FileManager.default
+
+        guard !manager.fileExists(atPath: entry.original.path) else {
+            showStatus("\(name) is back in the folder already")
+            return
+        }
+        do {
+            try manager.moveItem(at: entry.inTrash, to: entry.original)
+        } catch {
+            showStatus("Could not restore \(name): \(error.localizedDescription)")
+            return
+        }
+
+        let photo = Photo(url: entry.original)
+        let position = allPhotos.firstIndex {
+            $0.name.localizedStandardCompare(photo.name) == .orderedDescending
+        } ?? allPhotos.count
+        allPhotos.insert(photo, at: position)
+        if entry.wasMarked {
+            marked.insert(photo.name)
+            marksStore?.scheduleSave(marked)
+        }
+        rebuildVisiblePhotos()
+        if let index = photos.firstIndex(where: { $0.name == photo.name }) {
+            navigationStart = CFAbsoluteTimeGetCurrent()
+            currentIndex = index
+        }
+        showStatus("Restored \(name)")
+    }
+
+    // MARK: Sharing
+
+    /// Puts both the file and its pixels on the pasteboard: the Finder pastes the file, an image
+    /// editor pastes the photo.
+    func copyCurrentPhoto() {
+        guard let photo = currentPhoto else { return }
+        var items: [NSPasteboardWriting] = [photo.url as NSURL]
+        if let decoded = ImagePipeline.shared.bestCachedImage(photo.url) {
+            items.append(NSImage(cgImage: decoded.cgImage,
+                                 size: NSSize(width: decoded.pixelWidth, height: decoded.pixelHeight)))
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects(items)
+        showStatus("Copied \(photo.name)")
+    }
+
+    func revealCurrentInFinder() {
+        guard let photo = currentPhoto else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([photo.url])
     }
 
     // MARK: Status

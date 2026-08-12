@@ -14,6 +14,14 @@ final class ViewerState {
     var showExif = false
     var gridColumns = 5
     var showExportSheet = false
+    var showShortcuts = false
+    /// Carries magnification and position across photo switches — only ever on by request (Z).
+    var zoomLocked = false
+    /// Visible centre as a fraction of the document size, so it transfers between photos of any
+    /// dimensions.
+    var zoomAnchor: CGPoint?
+    /// True while a sheet or alert of ours owns the keyboard.
+    var isModalActive = false
 
     /// One-shot zoom request handed to the loupe's scroll view.
     var zoomCommand = ZoomCommand()
@@ -21,10 +29,22 @@ final class ViewerState {
     var zoomStatus: ZoomStatus?
 
     @ObservationIgnored weak var window: NSWindow?
+    /// Installed by `ContentView` so the Photo menu goes through the same delete confirmation.
+    @ObservationIgnored var requestDelete: (() -> Void)?
 
     var isZoomedIn: Bool {
         guard let zoomStatus else { return false }
         return !zoomStatus.isFitted
+    }
+
+    /// Gate for menu items carrying a bare-key equivalent.
+    ///
+    /// Those keys reach the local monitor first whenever the main window is key, so the menu path
+    /// exists for discoverability and for clicks. A key press arriving here means another window
+    /// (open panel, export sheet, alert) owns the keyboard, and the action must not run.
+    func mainWindowIsQuiet() -> Bool {
+        guard let window, window.attachedSheet == nil, NSApp.keyWindow === window else { return false }
+        return NSApp.currentEvent?.type != .keyDown
     }
 
     func requestZoomToggle() {
@@ -78,6 +98,11 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
 
+            if ui.showShortcuts {
+                ShortcutsOverlay()
+                    .transition(.opacity)
+            }
+
             if let message = library.statusMessage {
                 VStack {
                     Spacer()
@@ -99,11 +124,12 @@ struct ContentView: View {
         })
         .navigationTitle(library.windowTitle)
         .sheet(isPresented: $ui.showExportSheet) {
-            ExportSheet(library: library)
+            ExportSheet(library: library, ui: ui)
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
         .onAppear {
             installKeyMonitor()
+            ui.requestDelete = confirmDelete
         }
         .onDisappear {
             if let keyMonitor {
@@ -138,6 +164,9 @@ struct ContentView: View {
 
     // MARK: Keyboard
 
+    /// Arrows, page keys, home and end.
+    private static let navigationKeyCodes: Set<UInt16> = [115, 116, 119, 121, 123, 124, 125, 126]
+
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -164,7 +193,24 @@ struct ContentView: View {
             return event
         }
         guard !modifiers.contains(.control), !modifiers.contains(.option) else { return event }
+
+        // The cheat sheet works with no folder open, so it comes before the folder guard. Shift is
+        // part of "?" itself, which is why the filter above tolerates it.
+        if event.charactersIgnoringModifiers == "?" {
+            ui.showShortcuts.toggle()
+            return nil
+        }
+        if event.keyCode == 53, ui.showShortcuts {
+            ui.showShortcuts = false
+            return nil
+        }
+
         guard library.folder != nil, !library.photos.isEmpty else { return event }
+
+        // Fullscreen browsing is a pure keyboard activity; the pointer only gets in the way.
+        if ContentView.navigationKeyCodes.contains(event.keyCode), window.styleMask.contains(.fullScreen) {
+            NSCursor.setHiddenUntilMouseMoves(true)
+        }
 
         switch event.keyCode {
         case 123: // left
@@ -193,6 +239,8 @@ struct ContentView: View {
             confirmDelete()
             return nil
         case 53: // escape
+            // Escape is the way out of every mode, so it unlocks as well as fits.
+            ui.zoomLocked = false
             if ui.mode == .loupe, ui.isZoomedIn {
                 ui.requestZoomToFit()
             } else if ui.mode == .grid {
@@ -225,6 +273,8 @@ struct ContentView: View {
             library.toggleMarkCurrent()
         case "l":
             library.toggleFilter()
+        case "z":
+            ui.zoomLocked.toggle()
         default:
             // Swallow the rest so unhandled keys do not beep while browsing.
             return nil
@@ -247,7 +297,9 @@ struct ContentView: View {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Move to Trash")
         alert.addButton(withTitle: "Cancel")
+        ui.isModalActive = true
         alert.beginSheetModal(for: window) { response in
+            ui.isModalActive = false
             guard response == .alertFirstButtonReturn else { return }
             // Delete what the alert named, not whatever is current by now.
             guard library.currentPhoto?.url == photo.url else { return }

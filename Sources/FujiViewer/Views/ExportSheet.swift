@@ -4,6 +4,7 @@ import SwiftUI
 /// Copies or transcodes the marked photos into a folder of the user's choice.
 struct ExportSheet: View {
     let library: PhotoLibrary
+    let ui: ViewerState
 
     @Environment(\.dismiss) private var dismiss
 
@@ -80,6 +81,9 @@ struct ExportSheet: View {
         .padding(20)
         .frame(width: 380)
         .interactiveDismissDisabled(exporter.isRunning)
+        // Covers the destination panel too: it opens on top of this sheet, which stays up.
+        .onAppear { ui.isModalActive = true }
+        .onDisappear { ui.isModalActive = false }
     }
 
     // MARK: Running

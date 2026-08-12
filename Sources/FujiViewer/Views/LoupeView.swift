@@ -14,12 +14,20 @@ struct LoupeView: View {
     @State private var metadata: PhotoMetadata?
     @State private var isLoadingFull = false
     @State private var loadFailed = false
+    @State private var histogram: Histogram?
+    /// What `histogram` was computed from, so a sharper bitmap recomputes and nothing else does.
+    @State private var histogramSource: HistogramSource?
 
     private var pipeline: ImagePipeline { .shared }
 
     private struct Displayed {
         let url: URL
         let image: DecodedImage
+    }
+
+    private struct HistogramSource: Equatable {
+        let url: URL
+        let level: ImageLevel
     }
 
     var body: some View {
@@ -30,6 +38,7 @@ struct LoupeView: View {
                 ZoomableImageView(photoID: displayed.url,
                                   image: displayed.image,
                                   nativePixelSize: metadata?.displaySize,
+                                  ui: ui,
                                   command: ui.zoomCommand,
                                   onZoomChanged: handleZoomChanged)
             } else if loadFailed {
@@ -63,6 +72,27 @@ struct LoupeView: View {
                 .allowsHitTesting(false)
             }
 
+            if ui.zoomLocked {
+                VStack {
+                    HStack {
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.fill").font(.system(size: 10))
+                            Text("Locked · \(ui.zoomStatus?.percent ?? 100)%")
+                                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.thinMaterial, in: Capsule())
+                        // Clear of the decoding pill, which owns the top-right corner.
+                        .padding(.trailing, 16)
+                        .padding(.top, 60)
+                    }
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
+
             if library.isCurrentMarked {
                 VStack {
                     HStack {
@@ -81,11 +111,13 @@ struct LoupeView: View {
             if ui.showExif {
                 ExifOverlay(metadata: metadata,
                             level: displayed?.image.level,
-                            zoomPercent: ui.zoomStatus?.percent)
+                            zoomPercent: ui.zoomStatus?.percent,
+                            histogram: histogram)
             }
         }
         .onAppear { refresh() }
         .onChange(of: library.currentPhoto?.url) { _, _ in refresh() }
+        .onChange(of: ui.showExif) { _, _ in updateHistogram() }
     }
 
     // MARK: Loading
@@ -99,7 +131,11 @@ struct LoupeView: View {
         let url = photo.url
         loadFailed = false
         isLoadingFull = false
-        ui.zoomStatus = nil
+        histogram = nil
+        histogramSource = nil
+        // The lock carries the zoom across the switch, so the status it is derived from has to
+        // survive too.
+        if !ui.zoomLocked { ui.zoomStatus = nil }
         // A 40MP bitmap is ~160MB: never keep the previous photo's around.
         pipeline.releaseFullImage(keeping: url)
 
@@ -141,12 +177,37 @@ struct LoupeView: View {
         displayed = Displayed(url: url, image: image)
         loadFailed = false
         if image.level == .full { isLoadingFull = false }
+        updateHistogram()
 
         if let start = library.consumeNavigationStart() {
             let milliseconds = (CFAbsoluteTimeGetCurrent() - start) * 1000
             Log.line(String(format: "[FujiViewer] %@  key→screen %.1f ms  (%@ %dx%d)",
                             url.lastPathComponent, milliseconds, image.level.label,
                             image.pixelWidth, image.pixelHeight))
+        }
+    }
+
+    // MARK: Histogram
+
+    /// Only runs while the overlay is on screen, and only once per photo per bitmap quality: the
+    /// 2560px version replaces the preview's reading, nothing else recomputes.
+    private func updateHistogram() {
+        guard ui.showExif, let url = library.currentPhoto?.url else {
+            histogram = nil
+            histogramSource = nil
+            return
+        }
+        guard let image = pipeline.bestCachedImage(url, limit: .hq) else { return }
+        let source = HistogramSource(url: url, level: image.level)
+        guard histogramSource != source else { return }
+        histogramSource = source
+
+        DispatchQueue.global(qos: .utility).async {
+            let computed = Histogram.make(from: image.cgImage)
+            DispatchQueue.main.async {
+                guard library.currentPhoto?.url == url, ui.showExif else { return }
+                histogram = computed
+            }
         }
     }
 
@@ -245,11 +306,12 @@ struct ZoomableImageView: NSViewRepresentable {
     let photoID: URL
     let image: DecodedImage
     let nativePixelSize: CGSize?
+    let ui: ViewerState
     let command: ZoomCommand
     let onZoomChanged: (ZoomStatus) -> Void
 
     func makeNSView(context: Context) -> ZoomableScrollView {
-        let view = ZoomableScrollView()
+        let view = ZoomableScrollView(ui: ui)
         view.onZoomChanged = onZoomChanged
         context.coordinator.lastCommandToken = command.token
         view.update(photoID: photoID, image: image, nativePixelSize: nativePixelSize)
@@ -278,17 +340,27 @@ struct ZoomableImageView: NSViewRepresentable {
 
 final class ZoomableScrollView: NSScrollView {
     private let canvas = ImageCanvasView()
+    private let ui: ViewerState
     private var photoID: URL?
     private var decoded: DecodedImage?
     private var nativePixelSize: CGSize?
     private var fitMagnification: CGFloat = 1
     private var lastReported: ZoomStatus?
     private var isAdjustingLayout = false
+    /// What the zoom lock carries to the next photo. Only set while past fit, so `nil` means the
+    /// user is fitted and a photo change resets as it always did.
+    private var lockedState: (magnification: CGFloat, anchor: CGPoint)?
 
     var onZoomChanged: ((ZoomStatus) -> Void)?
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(ui: ViewerState) {
+        self.ui = ui
+        // A fresh view after a grid round trip or a cache miss still has to honour the lock, so it
+        // seeds itself from the state the previous one reported.
+        if ui.zoomLocked, let status = ui.zoomStatus, !status.isFitted, let anchor = ui.zoomAnchor {
+            lockedState = (status.magnification, anchor)
+        }
+        super.init(frame: .zero)
         wantsLayer = true
         drawsBackground = true
         backgroundColor = .black
@@ -333,6 +405,13 @@ final class ZoomableScrollView: NSScrollView {
         let photoChanged = photoID != newPhotoID
         let imageChanged = decoded !== image
         let sizeChanged = nativePixelSize != size
+
+        // Panning does not report a zoom change, so the anchor has to be re-read from the live
+        // position before the new photo's geometry lands on top of it.
+        if photoChanged, ui.zoomLocked, !isFitted, let fraction = visibleCenterFraction {
+            lockedState = (magnification, fraction)
+        }
+
         photoID = newPhotoID
         decoded = image
         nativePixelSize = size
@@ -351,21 +430,60 @@ final class ZoomableScrollView: NSScrollView {
     /// rest.
     private func applyCanvasGeometry(resetToFit: Bool) {
         guard let decoded else { return }
+        // A preview arrives before the photo's real pixel size does. At fit that is invisible, but
+        // a locked magnification is relative to the canvas, so laying it out at preview size would
+        // show the wrong zoom for the few ms until the metadata lands. Keep the current geometry —
+        // in a burst it is already the right one — and wait.
+        if ui.zoomLocked, lockedState != nil, nativePixelSize == nil, canvas.frame.width > 1 {
+            return
+        }
+
         let backingScale = window?.backingScaleFactor ?? 2
         let pixelSize = nativePixelSize ?? decoded.pixelSize
         let size = CGSize(width: max(1, (pixelSize.width / backingScale).rounded()),
                           height: max(1, (pixelSize.height / backingScale).rounded()))
 
         let wasFitted = isFitted
-        if canvas.frame.size != size {
+        let frameChanged = canvas.frame.size != size
+        // Any geometry change under a locked zoom has to re-place the photo, not just a switch:
+        // the real pixel size usually arrives one update after the photo does.
+        let locked = (resetToFit || frameChanged) && ui.zoomLocked ? lockedState : nil
+        if frameChanged {
             canvas.frame = CGRect(origin: .zero, size: size)
             canvas.imageFrame = CGRect(origin: .zero, size: size)
         }
         updateMagnificationLimits()
-        if resetToFit || wasFitted {
+        if let locked {
+            // A burst of same-size frames must not move at all, so the magnification is only
+            // re-applied when it actually differs.
+            if abs(magnification - locked.magnification) > 0.001 {
+                applyMagnification(locked.magnification, animated: false, centeredAt: nil)
+            }
+            scroll(toAnchor: locked.anchor)
+        } else if resetToFit || wasFitted {
             applyMagnification(fitMagnification, animated: false, centeredAt: nil)
         }
         reportZoom()
+    }
+
+    /// Visible centre as a fraction of the document, which is what transfers between photos.
+    private var visibleCenterFraction: CGPoint? {
+        let document = canvas.frame.size
+        guard document.width > 1, document.height > 1 else { return nil }
+        let visible = contentView.bounds
+        return CGPoint(x: visible.midX / document.width, y: visible.midY / document.height)
+    }
+
+    private func scroll(toAnchor fraction: CGPoint) {
+        let document = canvas.frame.size
+        let visible = contentView.bounds.size
+        guard document.width > 1, document.height > 1 else { return }
+        var origin = CGPoint(x: fraction.x * document.width - visible.width / 2,
+                             y: fraction.y * document.height - visible.height / 2)
+        origin.x = min(max(origin.x, 0), max(0, document.width - visible.width))
+        origin.y = min(max(origin.y, 0), max(0, document.height - visible.height))
+        contentView.scroll(to: origin)
+        reflectScrolledClipView(contentView)
     }
 
     // MARK: Magnification
@@ -406,9 +524,20 @@ final class ZoomableScrollView: NSScrollView {
     }
 
     func toggleZoom(centeredAt point: NSPoint? = nil) {
-        applyMagnification(isFitted ? maxMagnification : fitMagnification,
-                           animated: true,
-                           centeredAt: point)
+        guard isFitted else {
+            applyMagnification(fitMagnification, animated: true, centeredAt: point)
+            return
+        }
+        // Zooming in without a click point: go back to where the user last was rather than to the
+        // middle of the window.
+        applyMagnification(maxMagnification, animated: true, centeredAt: point ?? anchorPoint())
+    }
+
+    private func anchorPoint() -> NSPoint? {
+        guard let fraction = ui.zoomAnchor, canvas.frame.width > 1, canvas.frame.height > 1 else {
+            return nil
+        }
+        return NSPoint(x: fraction.x * canvas.frame.width, y: fraction.y * canvas.frame.height)
     }
 
     func zoomToFit(animated: Bool) {
@@ -437,6 +566,13 @@ final class ZoomableScrollView: NSScrollView {
 
     private func reportZoom() {
         let status = ZoomStatus(magnification: magnification, fitMagnification: fitMagnification)
+        if status.isFitted {
+            lockedState = nil
+        } else if let fraction = visibleCenterFraction {
+            lockedState = (magnification, fraction)
+            // Never mutate SwiftUI state inside a layout pass.
+            DispatchQueue.main.async { [weak self] in self?.ui.zoomAnchor = fraction }
+        }
         guard status != lastReported else { return }
         lastReported = status
         guard let onZoomChanged else { return }
