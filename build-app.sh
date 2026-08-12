@@ -1,17 +1,29 @@
 #!/bin/bash
 # Builds FujiViewer in release mode and assembles a double-clickable FujiViewer.app.
+#
+# Usage: ./build-app.sh [--universal]
+#   --universal   one binary for Apple Silicon and Intel; slower, used for released downloads.
+#
+# The release workflow sets FUJIVIEWER_VERSION to the tag it is building.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 APP_NAME="FujiViewer"
 BUNDLE_ID="com.fujiviewer.FujiViewer"
-VERSION="1.0"
+VERSION="${FUJIVIEWER_VERSION:-1.0}"
 APP_DIR="$APP_NAME.app"
 
-echo "==> swift build -c release"
-swift build -c release
-BIN_DIR="$(swift build -c release --show-bin-path)"
+BUILD_ARGS=(-c release)
+case "${1:-}" in
+    --universal) BUILD_ARGS+=(--arch arm64 --arch x86_64) ;;
+    "") ;;
+    *) echo "usage: $0 [--universal]" >&2; exit 2 ;;
+esac
+
+echo "==> swift build ${BUILD_ARGS[*]}"
+swift build "${BUILD_ARGS[@]}"
+BIN_DIR="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)"
 BINARY="$BIN_DIR/$APP_NAME"
 
 if [ ! -x "$BINARY" ]; then

@@ -14,6 +14,7 @@ boxed in `DecodedImage`, an `@unchecked Sendable` wrapper, rather than being pas
 
 ```bash
 swift build          # debug build
+swift test           # the XCTest suite (~2s, synthetic fixtures)
 swift run            # run unbundled, prints a key→screen timing line per photo
 ./build-app.sh       # release build + assemble a double-clickable FujiViewer.app
 ```
@@ -37,6 +38,13 @@ window, press ⌘O, or `open -a FujiViewer.app <folder>`.
    `NSHighResolutionCapable`, `CFBundleIconFile`
 5. ad-hoc codesigns and verifies the bundle
 
+Two switches:
+
+- `./build-app.sh --universal` builds for `arm64` and `x86_64` together. It is slower, and it is
+  what the release workflow uses; plain `./build-app.sh` stays single-arch for local work.
+- `FUJIVIEWER_VERSION=1.1.0 ./build-app.sh` stamps that version into `Info.plist`. It defaults to
+  `1.0`, and the release workflow passes the tag.
+
 The repository stays source-only: no binaries are committed, and the `.icns` is generated at
 packaging time.
 
@@ -55,32 +63,52 @@ resolution rather than resampled from one master bitmap. To change the artwork, 
 functions (`beginPlate`, `drawFuji`, `fillHeart`) and re-run `./build-app.sh`; sizes and file names
 come from the `variants` table and should not need touching.
 
-## Testing with a harness
-
-There is no XCTest target. The pattern used for the pipeline, the exporter and the library is to
-compile the real source files together with a throwaway `main.swift`:
+## Tests
 
 ```bash
-swiftc -swift-version 5 \
-  Sources/FujiViewer/Models/PhotoLibrary.swift \
-  Sources/FujiViewer/Models/Marks.swift \
-  Sources/FujiViewer/Pipeline/ImagePipeline.swift \
-  Sources/FujiViewer/Pipeline/DecodedImage.swift \
-  /tmp/harness/main.swift -o /tmp/harness/libtest
+swift test
 ```
 
-Notes that make this work:
+XCTest, in `Tests/FujiViewerTests`, covering the decoder's orientation handling, the four-level
+cache and its generation invalidation, folder scanning, marks, filtering, trash-and-undo, export
+(transcoding, metadata, collision naming) and the histogram. The whole suite runs in about two
+seconds.
 
-- `FujiViewerApp.swift` carries `@main`, so exclude it and provide a small `enum Log { static func
-  line(_:) }` stub in the harness instead.
-- Anything driving `DispatchSource` or debounced work (the folder watcher, mark saves) needs
-  `RunLoop.main.run()` and step chaining through `DispatchQueue.main.asyncAfter`.
-- SwiftUI views can be rasterised offscreen with `ImageRenderer` to eyeball a layout without
-  driving the UI.
+**Fixtures are synthetic and generated per run** into a temporary directory by `Fixtures.swift`:
+gradient images written out as JPEG and HEIC, one landscape HEIC tagged orientation 6 so the
+rotation path is exercised, and one image with an exactly known number of clipped pixels. CI has no
+photos, and a test must never be pointed at a real photo library — several of them delete, trash and
+restore what they are given.
 
-**Always run harnesses against copies of photos in a scratch directory.** Never point a test that
-trashes, restores, renames or writes at a real photo library. Reading a real folder is fine;
-writing to one is not.
+Two things to know when adding tests:
+
+- `ImagePipeline` is a process-wide singleton, so reset it in `setUp`. `PhotoLibrary` can be
+  instantiated directly.
+- The trash test skips itself (`XCTSkip`) if the environment has no usable Trash, rather than
+  failing the run.
+
+For one-off exploration outside the suite, the source files can also be compiled directly against a
+throwaway `main.swift` (exclude `FujiViewerApp.swift`, which carries `@main`, and stub `enum Log`).
+SwiftUI views can be rasterised offscreen with `ImageRenderer` to eyeball a layout without driving
+the UI.
+
+## Releases
+
+A release is cut by pushing a tag:
+
+```bash
+git tag v1.1.0
+git push origin v1.1.0
+```
+
+`.github/workflows/release.yml` then runs the tests, builds a universal app with the tag's version
+stamped into `Info.plist` (`FUJIVIEWER_VERSION`), asserts that the binary really contains both
+architectures, zips the bundle with `ditto`, writes a SHA-256 checksum file, and creates the GitHub
+Release with generated notes.
+
+Releases are ad-hoc signed and deliberately **not notarized** — there is no Apple Developer
+certificate involved, which is why the README explains the first-launch warning. `.github/workflows/ci.yml`
+runs the same build and tests on every push to `main` and every pull request.
 
 ## Benchmarking
 

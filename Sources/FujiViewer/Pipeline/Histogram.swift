@@ -58,9 +58,10 @@ struct Histogram: Equatable {
             let red = pixels[offset]
             let green = pixels[offset + 1]
             let blue = pixels[offset + 2]
-            // Rec. 709 luma.
+            // Rec. 709 luma. Rounded, not truncated: the weights do not sum to exactly 1 in binary
+            // floating point, so pure white computes as 254.999… and would never reach the top bin.
             let luma = 0.2126 * Double(red) + 0.7152 * Double(green) + 0.0722 * Double(blue)
-            bins[min(255, max(0, Int(luma)))] += 1
+            bins[min(255, max(0, Int(luma.rounded())))] += 1
             if red >= 254 || green >= 254 || blue >= 254 { highlights += 1 }
             if red <= 1 && green <= 1 && blue <= 1 { shadows += 1 }
         }

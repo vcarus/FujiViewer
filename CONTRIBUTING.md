@@ -9,12 +9,13 @@ macOS 14+, Swift 6 toolchain (Xcode 16+), no dependencies to install.
 
 ```bash
 swift build
+swift test
 swift run
 ```
 
-See [docs/development.md](docs/development.md) for packaging, the icon generator, the harness
-testing pattern and benchmarking, and [docs/architecture.md](docs/architecture.md) for how the
-decode pipeline works before changing anything on the browsing path.
+See [docs/development.md](docs/development.md) for packaging, the icon generator, the test suite and
+benchmarking, and [docs/architecture.md](docs/architecture.md) for how the decode pipeline works
+before changing anything on the browsing path.
 
 ## Code style
 
@@ -26,7 +27,10 @@ decode pipeline works before changing anything on the browsing path.
 
 ## Pull requests
 
-- `swift build` must be clean — no errors, no new warnings.
+- `swift build` and `swift test` must be clean — no errors, no new warnings, no failing tests. CI
+  runs both on every pull request.
+- New behaviour on the pipeline, library or exporter should come with a test. Fixtures are synthetic
+  and generated at run time; never add image files or point a test at a real photo library.
 - **Performance-sensitive changes need measured numbers, taken on Intel hardware.** A native 40MP
   decode costs ~1.7 s there; browsing must never trigger one. `swift run` logs a key→screen line per
   photo, which is the number to quote before and after.

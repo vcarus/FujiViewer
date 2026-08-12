@@ -15,6 +15,14 @@ let package = Package(
                 // keeps the pipeline free of strict-concurrency friction.
                 .swiftLanguageMode(.v5)
             ]
+        ),
+        .testTarget(
+            name: "FujiViewerTests",
+            dependencies: ["FujiViewer"],
+            path: "Tests/FujiViewerTests",
+            swiftSettings: [
+                .swiftLanguageMode(.v5)
+            ]
         )
     ]
 )

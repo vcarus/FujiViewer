@@ -51,10 +51,13 @@ enum ImageDecoder {
         switch level {
         case .thumb:
             let side = ImageLevel.thumb.maxPixelSize
-            var image = thumbnail(source, maxPixel: side, fromImage: false, ifAbsent: true, transform: false)
-            // A few JPEGs only carry a 120px EXIF thumbnail; resample the real image instead.
-            if let candidate = image, max(candidate.width, candidate.height) < 200 {
-                image = thumbnail(source, maxPixel: side, fromImage: true, ifAbsent: true, transform: false) ?? candidate
+            let embedded = thumbnail(source, maxPixel: side, fromImage: false, ifAbsent: true, transform: false)
+            // `IfAbsent` does not synthesise a thumbnail for HEIF at all — a HEIC without an
+            // embedded one, which is what this app's own export writes, returns nil — and a few
+            // JPEGs only carry a 120px EXIF thumbnail. Resample the real image in both cases.
+            var image = embedded
+            if embedded == nil || max(embedded?.width ?? 0, embedded?.height ?? 0) < 200 {
+                image = thumbnail(source, maxPixel: side, fromImage: true, ifAbsent: true, transform: false) ?? embedded
             }
             return image.flatMap { applyOrientation($0, orientation: info.orientation) }
 

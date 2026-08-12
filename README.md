@@ -1,5 +1,7 @@
 # FujiViewer
 
+[![CI](https://github.com/vcarus/FujiViewer/actions/workflows/ci.yml/badge.svg)](https://github.com/vcarus/FujiViewer/actions/workflows/ci.yml)
+
 A fast, keyboard-driven culling viewer for Fujifilm HIF/HEIC/JPEG photos on macOS.
 
 ## Why
@@ -32,6 +34,25 @@ decode happens only when you actually zoom in far enough to need the pixels.
 ## Requirements
 
 macOS 14 or later. Building needs a Swift 6 toolchain (Xcode 16+).
+
+## Download
+
+Grab the latest zip from the [releases page](https://github.com/vcarus/FujiViewer/releases), unzip
+it, and drag `FujiViewer.app` wherever you keep apps — `/Applications` is fine. The build is a
+universal binary, so it runs natively on both Apple Silicon and Intel Macs.
+
+**First launch.** The app is signed ad-hoc, not notarized, so macOS blocks the first open:
+
+- **macOS 15 (Sequoia) and later** — open it once, dismiss the warning, then go to
+  **System Settings ▸ Privacy & Security**, scroll to the message about FujiViewer, and click
+  **Open Anyway**.
+- **macOS 14 (Sonoma)** — right-click the app and choose **Open**, then confirm.
+
+Either way it is a one-time step. If you prefer the command line:
+
+```bash
+xattr -d com.apple.quarantine /Applications/FujiViewer.app
+```
 
 ## Install
 
