@@ -14,6 +14,17 @@ BUNDLE_ID="com.fujiviewer.FujiViewer"
 VERSION="${FUJIVIEWER_VERSION:-1.0}"
 APP_DIR="$APP_NAME.app"
 
+# The version is interpolated into the Info.plist heredoc below. An XML-significant character in it
+# ("&", "<") produces a plist macOS cannot parse, and nothing downstream catches that: codesign and
+# `codesign --verify` both succeed on such a bundle, the release workflow zips and publishes it, and
+# only the user finds out, when the app has no readable bundle identifier. So reject it here.
+if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$ ]]; then
+    echo "error: FUJIVIEWER_VERSION must look like 1.2.3 or 1.2.3-rc1, got '$VERSION'" >&2
+    exit 2
+fi
+# CFBundleVersion is documented as a numeric build version, so a pre-release suffix stays out of it.
+BUILD_VERSION="${VERSION%%-*}"
+
 BUILD_ARGS=(-c release)
 case "${1:-}" in
     --universal) BUILD_ARGS+=(--arch arm64 --arch x86_64) ;;
@@ -68,7 +79,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 	<key>CFBundleShortVersionString</key>
 	<string>$VERSION</string>
 	<key>CFBundleVersion</key>
-	<string>$VERSION</string>
+	<string>$BUILD_VERSION</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.photography</string>
 	<key>LSMinimumSystemVersion</key>
@@ -84,6 +95,10 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Second line of defence for the version check above: codesign happily signs a bundle whose
+# Info.plist does not parse, so the plist is linted here, before anything is signed or shipped.
+plutil -lint "$APP_DIR/Contents/Info.plist" > /dev/null
 
 echo "==> ad-hoc codesign"
 codesign --force --sign - "$APP_DIR"

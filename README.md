@@ -51,7 +51,7 @@ universal binary, so it runs natively on both Apple Silicon and Intel Macs.
 Either way it is a one-time step. If you prefer the command line:
 
 ```bash
-xattr -d com.apple.quarantine /Applications/FujiViewer.app
+xattr -dr com.apple.quarantine /Applications/FujiViewer.app
 ```
 
 ## Install

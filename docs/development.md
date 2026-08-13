@@ -101,14 +101,28 @@ git tag v1.1.0
 git push origin v1.1.0
 ```
 
+The tag must be a version tag (`v1.1.0`, `v1.1.0-rc1`): the workflow triggers on `v[0-9]*`, and
+`build-app.sh` rejects anything that is not a version before it reaches `Info.plist`. Both guards
+exist because codesign accepts a bundle whose plist does not parse, so a malformed version would
+otherwise ship as a published download.
+
 `.github/workflows/release.yml` then runs the tests, builds a universal app with the tag's version
 stamped into `Info.plist` (`FUJIVIEWER_VERSION`), asserts that the binary really contains both
 architectures, zips the bundle with `ditto`, writes a SHA-256 checksum file, and creates the GitHub
 Release with generated notes.
 
 Releases are ad-hoc signed and deliberately **not notarized** — there is no Apple Developer
-certificate involved, which is why the README explains the first-launch warning. `.github/workflows/ci.yml`
-runs the same build and tests on every push to `main` and every pull request.
+certificate involved, which is why the README explains the first-launch warning.
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request, in two jobs: the
+build and test suite, and `./build-app.sh --universal`, which keeps icon rendering, plist assembly,
+codesign and the x86_64 slice's compilation from first being exercised at a tag push.
+
+CI does not run the suite as `x86_64`. Hosted macOS runners are all Apple Silicon, the last Intel
+image predates the Swift 6 toolchain, and Rosetta is not a stand-in: it translates instructions
+while ImageIO and VideoToolbox still take the host's hardware paths, which is precisely where this
+app's behaviour differs between machines. **Intel is covered by running `swift test` on an Intel
+machine**, which is where the performance numbers in CONTRIBUTING.md have to come from anyway.
 
 ## Benchmarking
 

@@ -2,7 +2,10 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    # Version tags only. A bare 'v*' also matches a tag like 'vendor-sync', which would strip to
+    # the version "endor-sync" and publish it as a real release. (Actions globs do not cross '/',
+    # so a tag like v1/rc1 cannot reach this workflow at all.)
+    tags: ['v[0-9]*']
 
 permissions:
   contents: write
