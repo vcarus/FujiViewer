@@ -100,11 +100,14 @@ the UI.
 
 ## Releases
 
-A release is cut by pushing a tag:
+A release is cut by writing the version's notes, then pushing a tag:
 
 ```bash
-git tag v1.1.0
-git push origin v1.1.0
+$EDITOR CHANGELOG.md          # add a '## v1.2.0' section at the top
+git commit -am "…"
+git tag v1.2.0
+git push origin main
+git push origin v1.2.0
 ```
 
 The tag must be a version tag (`v1.1.0`, `v1.1.0-rc1`): the workflow triggers on `v[0-9]*`, and
@@ -112,10 +115,17 @@ The tag must be a version tag (`v1.1.0`, `v1.1.0-rc1`): the workflow triggers on
 exist because codesign accepts a bundle whose plist does not parse, so a malformed version would
 otherwise ship as a published download.
 
+The tag also needs a matching `## v1.2.0` section in `CHANGELOG.md`. That section, and nothing else,
+becomes the release body; the workflow extracts it before building and fails the release if it is
+missing or empty. GitHub's `--generate-notes` only lists merged pull requests, so on a repository
+that commits straight to `main` it degrades to a bare compare link — which is how v1.2.0 first
+shipped with a page that said nothing about what changed. The guard runs first so that mistake costs
+seconds, not a universal build.
+
 `.github/workflows/release.yml` then runs the tests, builds a universal app with the tag's version
 stamped into `Info.plist` (`FUJIVIEWER_VERSION`), asserts that the binary really contains both
 architectures, zips the bundle with `ditto`, writes a SHA-256 checksum file, and creates the GitHub
-Release with generated notes.
+Release with that body plus the compare link.
 
 Releases are ad-hoc signed and deliberately **not notarized** — there is no Apple Developer
 certificate involved, which is why the README explains the first-launch warning.
