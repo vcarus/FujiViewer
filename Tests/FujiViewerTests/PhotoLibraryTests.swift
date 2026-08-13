@@ -169,6 +169,82 @@ final class PhotoLibraryTests: XCTestCase {
         XCTAssertEqual(library.currentPhoto?.name, "a.jpg", "selection stays on the photo just unmarked")
     }
 
+    // MARK: Clearing marks
+
+    /// The marks file goes to the Trash rather than being unlinked, so a mis-click is recoverable.
+    ///
+    /// Tested at the store level because that is where the resulting Trash URL is visible: the test
+    /// takes its own file back out of the Trash afterwards instead of leaving debris behind.
+    func testTrashingTheMarksFilePutsItInTheTrash() throws {
+        let folder = try makeFolder(["a.jpg"])
+        let store = MarksStore(folder: folder)
+
+        // Whether a Trash exists is probed first: without one `trashFile` deliberately falls back to
+        // deleting, and this test would otherwise report that fallback as a failure.
+        let probe = folder.appendingPathComponent("trash-probe")
+        try Data("probe".utf8).write(to: probe)
+        do {
+            var probeInTrash: NSURL?
+            try FileManager.default.trashItem(at: probe, resultingItemURL: &probeInTrash)
+            if let probeInTrash = probeInTrash as URL? { try? FileManager.default.removeItem(at: probeInTrash) }
+        } catch {
+            throw XCTSkip("No usable Trash here: \(error.localizedDescription)")
+        }
+
+        store.scheduleSave(["a.jpg"])
+        store.flush()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL.path))
+
+        let inTrash = try XCTUnwrap(store.trashFile(), "the file existed, so it should have been trashed")
+        defer { try? FileManager.default.removeItem(at: inTrash) }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.fileURL.path), "gone from the folder")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: inTrash.path), "and recoverable from the Trash")
+    }
+
+    func testClearAllMarksCancelsThePendingSaveSoTheFileStaysGone() throws {
+        let folder = try makeFolder(["a.jpg", "b.jpg", "c.jpg"])
+        let library = PhotoLibrary()
+        library.open(folder: folder)
+
+        // Never flushed, so no file is written and nothing reaches the Trash: what is under test is
+        // that the debounced save still pending from these marks does not write the file back out.
+        library.select(index: 0)
+        library.toggleMarkCurrent()
+        library.select(index: 2)
+        library.toggleMarkCurrent()
+
+        library.clearAllMarks()
+
+        XCTAssertEqual(library.markedCount, 0)
+        XCTAssertEqual(library.statusMessage, "Cleared 2 hearts")
+        XCTAssertEqual(library.allPhotos.count, 3, "photos are untouched")
+
+        // Flushing is what the debounce timer would have done a second later, without the wait: if
+        // clearing had left that save in flight, this is where the marks would come back.
+        library.flushMarks()
+        let marksFile = folder.appendingPathComponent(MarksStore.fileName)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marksFile.path),
+                       "a save left in flight would resurrect the marks a second later")
+    }
+
+    func testClearAllMarksWhileFilteringShowsEverythingAgain() throws {
+        let folder = try makeFolder(["a.jpg", "b.jpg", "c.jpg"])
+        let library = PhotoLibrary()
+        library.open(folder: folder)
+
+        library.select(index: 1)
+        library.toggleMarkCurrent()
+        library.toggleFilter()
+        XCTAssertEqual(library.photos.map(\.name), ["b.jpg"])
+
+        library.clearAllMarks()
+
+        XCTAssertFalse(library.filterMarkedOnly, "an empty filtered list would be a dead end")
+        XCTAssertEqual(library.photos.map(\.name), ["a.jpg", "b.jpg", "c.jpg"])
+        XCTAssertEqual(library.currentPhoto?.name, "b.jpg", "selection stays on the photo just cleared")
+    }
+
     // MARK: Trash and undo
 
     func testTrashAndUndoRestoresFileMarkAndSelection() throws {

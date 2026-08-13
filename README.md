@@ -107,15 +107,19 @@ too; a single image file opens its folder and selects it.
 
 **Where are my marks stored?** In a hidden `.fujiviewer.json` inside the folder you are browsing,
 listing marked file names. Copy or back up the folder and the marks travel with it. Delete the file
-and the marks are gone; nothing is stored outside the folder.
+and the marks are gone; nothing is stored outside the folder. **Photo ▸ Clear All Hearts…** does the
+same from inside the app, after a confirmation: it drops every mark in the current folder and moves
+the file to the Trash. There is no undo inside FujiViewer, but a mis-click is recoverable — put the
+file back from the Trash (it is hidden, so press ⌘⇧. there to see it) and reopen the folder.
 
 **Why does JPEG export convert to 8-bit?** A Fuji HIF decodes to 10 bits per component, and JPEG
 cannot hold that. macOS's image writer refuses the file outright rather than converting, so
 FujiViewer converts to 8-bit first. HEIC, TIFF and PNG exports keep the full 10-bit data.
 
-**Does it modify my photos?** No. Photos are only ever read. The single destructive action is Move
-to Trash, which uses the system Trash and can be undone with ⌘Z. Exports always write new files to
-a folder you choose, never in place.
+**Does it modify my photos?** No. Photos are only ever read. The only destructive action on a photo
+is Move to Trash, which uses the system Trash and can be undone with ⌘Z. Clear All Hearts moves the
+`.fujiviewer.json` marks file to the Trash, never a photo. Exports always write new files to a folder
+you choose, never in place.
 
 **Which files does it show?** HIF, HEIC, HEIF, JPG and JPEG, sorted the way Finder sorts them.
 

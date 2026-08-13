@@ -110,6 +110,13 @@ struct FujiViewerApp: App {
         .keyboardShortcut("l", modifiers: [])
         .disabled(bareKeysBlocked || library.allPhotos.isEmpty)
 
+        // Deliberately without a key equivalent: it undoes a whole culling pass and cannot be taken
+        // back, so it stays a menu-only, confirmed action.
+        Button("Clear All Hearts…") {
+            ui.requestClearMarks?()
+        }
+        .disabled(library.markedCount == 0)
+
         Divider()
 
         // The standard Edit ▸ Copy stays for text fields; it is disabled whenever no responder

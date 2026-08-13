@@ -51,6 +51,30 @@ final class MarksStore {
         write(marks)
     }
 
+    /// Moves the marks file to the Trash and drops any pending save.
+    ///
+    /// Only the confirmed "clear every heart" uses this. Ordinary saves keep unlinking the file in
+    /// `write` — trashing it every time the last heart comes off would litter the Trash with dot
+    /// files. Here the user is throwing away a whole culling pass, which deserves a way back.
+    @discardableResult
+    func trashFile() -> URL? {
+        pendingWork?.cancel()
+        pendingWork = nil
+        pendingMarks = nil
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        do {
+            var inTrash: NSURL?
+            try FileManager.default.trashItem(at: fileURL, resultingItemURL: &inTrash)
+            return inTrash as URL?
+        } catch {
+            // Not every volume has a Trash. The promise is that the marks are gone, so fall back to
+            // deleting outright rather than leaving the file behind.
+            NSLog("[FujiViewer] could not trash \(fileURL.path): \(error.localizedDescription)")
+            try? FileManager.default.removeItem(at: fileURL)
+            return nil
+        }
+    }
+
     private func write(_ marks: Set<String>) {
         do {
             if marks.isEmpty {

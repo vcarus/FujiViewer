@@ -31,6 +31,8 @@ final class ViewerState {
     @ObservationIgnored weak var window: NSWindow?
     /// Installed by `ContentView` so the Photo menu goes through the same delete confirmation.
     @ObservationIgnored var requestDelete: (() -> Void)?
+    /// Installed by `ContentView`; clearing every heart is confirmed the same way.
+    @ObservationIgnored var requestClearMarks: (() -> Void)?
 
     var isZoomedIn: Bool {
         guard let zoomStatus else { return false }
@@ -134,6 +136,7 @@ struct ContentView: View {
         .onAppear {
             installKeyMonitor()
             ui.requestDelete = confirmDelete
+            ui.requestClearMarks = confirmClearMarks
         }
         .onDisappear {
             if let keyMonitor {
@@ -308,6 +311,28 @@ struct ContentView: View {
             // Delete what the alert named, not whatever is current by now.
             guard library.currentPhoto?.url == photo.url else { return }
             library.deleteCurrent()
+        }
+    }
+
+    // MARK: Clearing marks
+
+    private func confirmClearMarks() {
+        guard let folder = library.folder, let window = ui.window else { return }
+        let count = library.markedCount
+        guard count > 0, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Clear all \(count) heart\(count == 1 ? "" : "s") in \u{201C}\(folder.lastPathComponent)\u{201D}?"
+        alert.informativeText = "This moves \(MarksStore.fileName) to the Trash. The photos themselves are not touched, and there is no undo inside FujiViewer — put the file back from the Trash to get the marks back."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Clear Hearts")
+        alert.addButton(withTitle: "Cancel")
+        ui.isModalActive = true
+        alert.beginSheetModal(for: window) { response in
+            ui.isModalActive = false
+            guard response == .alertFirstButtonReturn else { return }
+            // Clear the folder the alert named, not whatever is open by now.
+            guard library.folder == folder else { return }
+            library.clearAllMarks()
         }
     }
 }

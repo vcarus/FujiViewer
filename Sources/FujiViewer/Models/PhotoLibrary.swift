@@ -343,6 +343,33 @@ final class PhotoLibrary {
         }
     }
 
+    /// Drops every heart in this folder and moves `.fujiviewer.json` to the Trash with them.
+    ///
+    /// The file goes immediately rather than on the usual one-second save debounce: the action is
+    /// destructive and confirmed, so it must be gone by the time the user looks for it.
+    func clearAllMarks() {
+        guard !marked.isEmpty else { return }
+        let count = marked.count
+        let anchor = currentPhoto?.name
+        marked.removeAll()
+        marksStore?.trashFile()
+        // Undoing a delete restores the heart it carried, which would write the file back out for a
+        // photo the user just cleared. Forget those marks too.
+        trashed = trashed.map { TrashedPhoto(original: $0.original, inTrash: $0.inTrash, wasMarked: false) }
+        if filterMarkedOnly {
+            filterMarkedOnly = false
+            rebuildVisiblePhotos()
+            if let anchor, let index = photos.firstIndex(where: { $0.name == anchor }) {
+                currentIndex = index
+            } else {
+                currentIndex = min(currentIndex, max(0, photos.count - 1))
+            }
+            showStatus("Cleared \(count) heart\(count == 1 ? "" : "s") — showing all")
+        } else {
+            showStatus("Cleared \(count) heart\(count == 1 ? "" : "s")")
+        }
+    }
+
     func toggleFilter() {
         if !filterMarkedOnly && marked.isEmpty {
             showStatus("No marked photos")
