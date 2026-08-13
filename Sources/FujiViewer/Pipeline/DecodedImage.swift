@@ -32,6 +32,18 @@ enum ImageLevel: Int, Comparable, CaseIterable {
         case .full: return .max
         }
     }
+
+    /// Smallest embedded image worth serving this level with, rather than resampling the real
+    /// image. Well below `maxPixelSize`, because embedded sizes are whatever the camera chose to
+    /// write: a 120px EXIF thumbnail is useless for the grid, a 1440px camera preview is not.
+    var minimumEmbeddedSize: Int {
+        switch self {
+        case .thumb: return 200
+        case .preview: return 800
+        // Neither level is ever served from an embedded image.
+        case .hq, .full: return .max
+        }
+    }
 }
 
 /// Immutable wrapper around a decoded `CGImage`.

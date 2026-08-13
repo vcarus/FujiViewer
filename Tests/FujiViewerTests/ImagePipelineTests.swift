@@ -51,6 +51,23 @@ final class ImagePipelineTests: XCTestCase {
         XCTAssertEqual(full.pixelHeight, 600)
     }
 
+    func testAThumbIsResampledFromABitmapTheCacheAlreadyHolds() throws {
+        let folder = try Fixtures.makeDirectory(self)
+        let url = try Fixtures.writeJPEG(in: folder, named: "photo.jpg", width: 900, height: 600)
+
+        _ = try XCTUnwrap(load(url, level: .preview))
+        // With the file gone, a thumbnail can only come from the bitmap already in the cache. That
+        // is the point of the shortcut: for a source with no embedded thumbnail, decoding the file
+        // again costs 0.6–1.0 s on Intel against ~30 ms to shrink what browsing already decoded.
+        try FileManager.default.removeItem(at: url)
+
+        let thumb = try XCTUnwrap(load(url, level: .thumb), "the thumb must not need the file again")
+        XCTAssertEqual(thumb.level, .thumb)
+        XCTAssertEqual(max(thumb.pixelWidth, thumb.pixelHeight), ImageLevel.thumb.maxPixelSize)
+        XCTAssertEqual(Double(thumb.pixelWidth) / Double(thumb.pixelHeight), 900.0 / 600.0,
+                       accuracy: 0.02, "resampling must not distort the frame")
+    }
+
     func testBestCachedImageRespectsTheLimit() throws {
         let folder = try Fixtures.makeDirectory(self)
         let url = try Fixtures.writeJPEG(in: folder, named: "photo.jpg", width: 900, height: 600)

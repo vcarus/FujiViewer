@@ -55,8 +55,13 @@ enum ImageDecoder {
             // `IfAbsent` does not synthesise a thumbnail for HEIF at all — a HEIC without an
             // embedded one, which is what this app's own export writes, returns nil — and a few
             // JPEGs only carry a 120px EXIF thumbnail. Resample the real image in both cases.
+            //
+            // That resample costs what a decode costs: measured on Intel, 0.6–1.0 s for a 40MP
+            // HEIC carrying no embedded thumbnail, against 1.2–1.6 s for its native decode and
+            // 1–3 ms for the embedded lookup that returns nil. `ImagePipeline.performDecode`
+            // avoids it whenever a larger bitmap for the photo is already decoded (~30 ms).
             var image = embedded
-            if embedded == nil || max(embedded?.width ?? 0, embedded?.height ?? 0) < 200 {
+            if !isUsableEmbedded(embedded, for: .thumb) {
                 image = thumbnail(source, maxPixel: side, fromImage: true, ifAbsent: true, transform: false) ?? embedded
             }
             return image.flatMap { applyOrientation($0, orientation: info.orientation) }
@@ -65,7 +70,7 @@ enum ImageDecoder {
             // Fast path: the embedded ~1920px preview, ~40ms on a 40MP HIF.
             let embedded = thumbnail(source, maxPixel: ImageLevel.preview.maxPixelSize,
                                      fromImage: false, ifAbsent: false, transform: false)
-            if let embedded, max(embedded.width, embedded.height) >= 800 {
+            if let embedded, isUsableEmbedded(embedded, for: .preview) {
                 return applyOrientation(embedded, orientation: info.orientation)
             }
             // No usable embedded preview (plain JPEG): fall back to a real decode, which already
@@ -101,6 +106,14 @@ enum ImageDecoder {
         return applyOrientation(image, orientation: info.orientation)
     }
 
+    /// Whether an embedded image is big enough to serve `level`, or whether the real image has to
+    /// be resampled instead. The thresholds live next to the sizes they guard, on `ImageLevel`, so
+    /// that raising a level's `maxPixelSize` cannot leave a stale gate behind.
+    private static func isUsableEmbedded(_ image: CGImage?, for level: ImageLevel) -> Bool {
+        guard let image else { return false }
+        return max(image.width, image.height) >= level.minimumEmbeddedSize
+    }
+
     private static func thumbnail(_ source: CGImageSource,
                                   maxPixel: Int,
                                   fromImage: Bool,
@@ -114,6 +127,25 @@ enum ImageDecoder {
             kCGImageSourceShouldCacheImmediately: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// Downsamples an already-decoded bitmap, never upscales. The input is expected to be display
+    /// oriented already, so the result needs no further rotation.
+    static func resample(_ image: CGImage, maxPixel: Int) -> CGImage? {
+        let longestSide = max(image.width, image.height)
+        guard longestSide > maxPixel else { return image }
+        let scale = Double(maxPixel) / Double(longestSide)
+        let width = max(1, Int((Double(image.width) * scale).rounded()))
+        let height = max(1, Int((Double(image.height) * scale).rounded()))
+
+        let bitmapInfo = CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let context = makeContext(width: width, height: height,
+                                        colorSpace: image.colorSpace, bitmapInfo: bitmapInfo) else {
+            return nil
+        }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     /// Rotates/mirrors raw pixels into display orientation.
@@ -448,7 +480,7 @@ final class ImagePipeline: @unchecked Sendable {
         }
         lock.unlock()
 
-        let decoded = ImageDecoder.decode(url: url, level: level).map { DecodedImage(cgImage: $0, level: level) }
+        let decoded = decodeOrResample(url: url, level: level)
         if let decoded { store(decoded, key: key, level: level) }
 
         lock.lock()
@@ -456,6 +488,20 @@ final class ImagePipeline: @unchecked Sendable {
         inFlight[key] = nil
         lock.unlock()
         deliver(decoded, to: waiters)
+    }
+
+    /// A thumbnail is the one level that can be produced from a bitmap the cache already holds.
+    ///
+    /// It matters for sources with no embedded thumbnail — the app's own HEIC exports — where the
+    /// decoder has to resample the real image: measured on Intel with a 40MP HEIC, 0.6–1.0 s to
+    /// decode the file again against ~30 ms to shrink a preview that browsing already decoded.
+    /// Cached bitmaps are display oriented, so the result needs no further rotation.
+    private func decodeOrResample(url: URL, level: ImageLevel) -> DecodedImage? {
+        if level == .thumb, let larger = bestCachedImage(url), larger.level > .thumb,
+           let resampled = ImageDecoder.resample(larger.cgImage, maxPixel: ImageLevel.thumb.maxPixelSize) {
+            return DecodedImage(cgImage: resampled, level: .thumb)
+        }
+        return ImageDecoder.decode(url: url, level: level).map { DecodedImage(cgImage: $0, level: level) }
     }
 
     private func deliver(_ image: DecodedImage?, to waiters: [(DecodedImage?) -> Void]) {
