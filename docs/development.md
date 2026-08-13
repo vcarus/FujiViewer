@@ -132,7 +132,9 @@ Release with that body plus the compare link.
 Releases are ad-hoc signed and deliberately **not notarized** — there is no Apple Developer
 certificate involved, which is why the README explains the first-launch warning.
 
-`.github/workflows/ci.yml` runs on every push to `main` and every pull request, in two jobs: the
+`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests — except ones that only
+touch Markdown, `docs/` or `LICENSE`, which compile nothing and are not worth a universal build at
+ten times the Linux minute rate. It runs in two jobs: the
 build and test suite, and `./build-app.sh --universal`, which keeps icon rendering, plist assembly,
 codesign and the x86_64 slice's compilation from first being exercised at a tag push.
 
