@@ -117,7 +117,9 @@ otherwise ship as a published download.
 
 The tag also needs a matching `## v1.2.0` section in `CHANGELOG.md`. That section, and nothing else,
 becomes the release body; the workflow extracts it before building and fails the release if it is
-missing or empty. GitHub's `--generate-notes` only lists merged pull requests, so on a repository
+missing or empty. Write its paragraphs unwrapped — GitHub turns a single newline in a release body
+into a line break, so text wrapped at the width used everywhere else in this repository arrives on
+the page as ragged short lines. GitHub's `--generate-notes` only lists merged pull requests, so on a repository
 that commits straight to `main` it degrades to a bare compare link — which is how v1.2.0 first
 shipped with a page that said nothing about what changed. The guard runs first so that mistake costs
 seconds, not a universal build.
