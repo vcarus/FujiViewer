@@ -23,9 +23,11 @@ jobs:
       # and that is easy to miss when the page is only read after publishing.
       - name: Release notes
         run: |
+          # Stops at the next *version* heading, not at any '## ': a subheading inside a version's
+          # section would otherwise truncate the notes silently, half a page short and still green.
           notes="$(awk -v tag="$GITHUB_REF_NAME" '
             $0 == "## " tag { found = 1; next }
-            found && /^## / { exit }
+            found && /^## v[0-9]/ { exit }
             found { print }
           ' CHANGELOG.md)"
           if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
