@@ -57,7 +57,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # --notes-file carries the install and first-launch instructions, which every release
+          # needs and which the generated changelog does not cover; --generate-notes appends the
+          # commit log after it.
           gh release create "$GITHUB_REF_NAME" \
             "FujiViewer-${GITHUB_REF_NAME}.zip" \
             checksums.txt \
+            --notes-file .github/release-notes.md \
             --generate-notes
