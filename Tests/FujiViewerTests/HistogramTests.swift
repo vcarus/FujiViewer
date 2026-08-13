@@ -43,17 +43,24 @@ final class HistogramTests: XCTestCase {
     }
 
     func testDisplayCeilingIgnoresASingleSpike() throws {
-        // One enormous bin (the white block) must not set the scale for the whole chart.
-        let image = Fixtures.makeClippingImage(side: 400, whitePixels: 40_000, blackPixels: 10_000)
+        // The gradient spreads its samples over ~120 bins and the red block drops a twenty-fifth of
+        // them into one. The clipping fixture would not do: it fills three bins, so the 99th
+        // percentile lands on an empty one, displayCeiling falls back to its max(1, …) floor, and
+        // every assertion below passes for a `displayCeiling` that just returned 1.
+        let image = Fixtures.makeImage(width: 400, height: 400)
         let histogram = try XCTUnwrap(Histogram.make(from: image))
+        let peak = try XCTUnwrap(histogram.bins.max())
 
-        XCTAssertLessThan(histogram.displayCeiling, histogram.bins.max() ?? 0,
-                          "the 99th percentile sits below the peak")
-        XCTAssertGreaterThan(histogram.displayCeiling, 0)
+        XCTAssertEqual(peak, 6_400, "the red block covers a fifth of each side")
+        XCTAssertGreaterThan(histogram.displayCeiling, 1, "a real percentile, not the floor")
+        XCTAssertLessThan(histogram.displayCeiling, peak / 2, "one spike must not set the scale")
     }
 
-    func testAnEmptyImageIsRejectedGracefully() {
-        // A 1×1 image is the smallest thing the sampler can be handed; it must not divide by zero.
+    func testASinglePixelImageIsStillCounted() {
+        // A 1×1 image is the smallest thing the sampler can be handed: the scale maths must not
+        // divide by zero or round the sample grid away. The zero-dimension guard in `make` cannot
+        // be reached from a test — Core Graphics refuses to build a 0×0 `CGImage` at all — so it
+        // stays as defensive code, and this test covers the smallest case that does exist.
         let image = Fixtures.makeClippingImage(side: 1, whitePixels: 0, blackPixels: 0)
         let histogram = Histogram.make(from: image)
 

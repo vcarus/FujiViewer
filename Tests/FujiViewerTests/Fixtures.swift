@@ -52,12 +52,30 @@ enum Fixtures {
         let blackSide = Int(Double(blackPixels).squareRoot().rounded())
         precondition(whiteSide * whiteSide == whitePixels, "whitePixels must be a perfect square")
         precondition(blackSide * blackSide == blackPixels, "blackPixels must be a perfect square")
+        // The blocks are drawn into opposite corners, so this is what keeps them from overlapping —
+        // and an overlap would silently invalidate the clipping percentages the caller asserts on.
+        precondition(whiteSide + blackSide <= side, "the clipped blocks must fit without overlapping")
 
         context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: whiteSide, height: whiteSide))
         context.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1))
         context.fill(CGRect(x: side - blackSide, y: side - blackSide, width: blackSide, height: blackSide))
         return context.makeImage()!
+    }
+
+    // MARK: Pixels
+
+    /// The colour at one pixel, with (0, 0) at the top-left the way `CGImage` rows run.
+    ///
+    /// Orientation can only be checked by sampling: of the eight EXIF orientations, only the 90°
+    /// ones change the frame's proportions, so dimensions alone cannot tell a correct rotation from
+    /// one that is 180° out or mirrored.
+    static func pixel(_ image: CGImage, x: Int, y: Int) -> (red: Int, green: Int, blue: Int) {
+        let context = makeContext(width: image.width, height: image.height)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let pixels = context.data!.assumingMemoryBound(to: UInt8.self)
+        let offset = (y * image.width + x) * 4
+        return (Int(pixels[offset]), Int(pixels[offset + 1]), Int(pixels[offset + 2]))
     }
 
     private static func makeContext(width: Int, height: Int) -> CGContext {
@@ -127,6 +145,32 @@ enum Fixtures {
         try write(makeImage(width: width, height: height),
                   to: folder.appendingPathComponent(name),
                   type: .jpeg)
+    }
+
+    // MARK: Waiting
+
+    /// Guards an escaping completion so that it does nothing once the wait it belongs to has ended.
+    ///
+    /// Work that outlives its timeout would otherwise call `fulfill()` on an expectation whose test
+    /// has already finished. XCTest treats that as an API violation and raises, which takes down the
+    /// whole test process — one slow decode failing the entire suite instead of one test.
+    final class CompletionGate {
+        private let lock = NSLock()
+        private var isOpen = true
+
+        /// Runs `body` only while the gate is open. `body` must not call back into the gate.
+        func run(_ body: () -> Void) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard isOpen else { return }
+            body()
+        }
+
+        func close() {
+            lock.lock()
+            isOpen = false
+            lock.unlock()
+        }
     }
 
     enum FixtureError: Error {

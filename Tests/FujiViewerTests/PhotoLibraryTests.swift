@@ -176,6 +176,20 @@ final class PhotoLibraryTests: XCTestCase {
         // anything left behind by a mid-test failure is recognisable as test debris.
         let names = ["FujiViewerTest-a.jpg", "FujiViewerTest-b.jpg", "FujiViewerTest-c.jpg"]
         let folder = try makeFolder(names)
+
+        // Whether a Trash exists is probed directly, before the library is opened. Keying the skip
+        // on the wording of a status message instead would mean that rewording that message turns
+        // this test into a hard failure everywhere the Trash is unavailable.
+        let probe = folder.appendingPathComponent("trash-probe")
+        try Data("probe".utf8).write(to: probe)
+        do {
+            var trashed: NSURL?
+            try FileManager.default.trashItem(at: probe, resultingItemURL: &trashed)
+            if let trashed = trashed as URL? { try? FileManager.default.removeItem(at: trashed) }
+        } catch {
+            throw XCTSkip("No usable Trash here: \(error.localizedDescription)")
+        }
+
         let library = PhotoLibrary()
         library.open(folder: folder)
         library.select(index: 1)
@@ -184,10 +198,6 @@ final class PhotoLibraryTests: XCTestCase {
         let victim = folder.appendingPathComponent(names[1])
         XCTAssertFalse(library.canUndoDelete)
         library.deleteCurrent()
-
-        if library.statusMessage?.hasPrefix("Could not trash") == true {
-            throw XCTSkip("No usable Trash here: \(library.statusMessage ?? "")")
-        }
 
         XCTAssertEqual(library.allPhotos.map(\.name), [names[0], names[2]])
         XCTAssertFalse(FileManager.default.fileExists(atPath: victim.path))

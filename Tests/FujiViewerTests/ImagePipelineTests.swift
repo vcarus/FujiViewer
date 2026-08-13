@@ -17,10 +17,16 @@ final class ImagePipelineTests: XCTestCase {
 
     private func load(_ url: URL, level: ImageLevel) throws -> DecodedImage? {
         let loaded = expectation(description: "decoded \(level.label)")
+        // A decode that outlives the timeout must not fulfil an expectation whose test has ended.
+        let gate = Fixtures.CompletionGate()
+        defer { gate.close() }
+
         var result: DecodedImage?
         pipeline.load(url, level: level, generation: nil) { image in
-            result = image
-            loaded.fulfill()
+            gate.run {
+                result = image
+                loaded.fulfill()
+            }
         }
         wait(for: [loaded], timeout: 20)
         return result
@@ -139,13 +145,18 @@ final class ImagePipelineTests: XCTestCase {
         let url = try Fixtures.writeJPEG(in: folder, named: "photo.jpg")
 
         let settled = expectation(description: "prefetch resolved")
+        let gate = Fixtures.CompletionGate()
+        defer { gate.close() }
+
         var result: DecodedImage?
         let stale = pipeline.beginNavigation()
         // The selection moves on before the worker picks the request up.
         pipeline.beginNavigation()
         pipeline.load(url, level: .hq, generation: stale) { image in
-            result = image
-            settled.fulfill()
+            gate.run {
+                result = image
+                settled.fulfill()
+            }
         }
         wait(for: [settled], timeout: 20)
 

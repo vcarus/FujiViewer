@@ -11,12 +11,20 @@ final class PhotoExporterTests: XCTestCase {
                         to destination: URL) throws -> PhotoExporter {
         let exporter = PhotoExporter()
         let finished = expectation(description: "export finished")
+        // An export that outlives the timeout must not fulfil an expectation whose test has ended.
+        let gate = Fixtures.CompletionGate()
+        defer { gate.close() }
+
         exporter.run(photos: photos, format: format, quality: quality,
                      includeMetadata: includeMetadata, destination: destination) {
-            finished.fulfill()
+            gate.run { finished.fulfill() }
         }
         wait(for: [finished], timeout: 60)
         return exporter
+    }
+
+    private func fileSize(of url: URL) throws -> Int {
+        try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
     }
 
     private func properties(of url: URL) throws -> [CFString: Any] {
@@ -168,6 +176,22 @@ final class PhotoExporterTests: XCTestCase {
         XCTAssertEqual(ExportFormat.heic.fileName(for: source), "DSCF1234.heic")
         XCTAssertEqual(ExportFormat.tiff.fileName(for: source), "DSCF1234.tiff")
         XCTAssertEqual(ExportFormat.png.fileName(for: source), "DSCF1234.png")
+    }
+
+    func testQualityReachesTheEncoder() throws {
+        let folder = try Fixtures.makeDirectory(self)
+        let source = try Fixtures.writeJPEG(in: folder, named: "photo.jpg", width: 900, height: 600)
+        let low = try Fixtures.makeDirectory(self)
+        let high = try Fixtures.makeDirectory(self)
+
+        _ = try export([Photo(url: source)], format: .jpeg, quality: 0.1, to: low)
+        _ = try export([Photo(url: source)], format: .jpeg, quality: 1.0, to: high)
+
+        // Without this, every export test runs at the default 0.9 and the slider could stop
+        // reaching kCGImageDestinationLossyCompressionQuality without a single failure.
+        XCTAssertLessThan(try fileSize(of: low.appendingPathComponent("photo.jpg")),
+                          try fileSize(of: high.appendingPathComponent("photo.jpg")),
+                          "the quality argument must reach the encoder")
     }
 
     func testOnlyLossyFormatsUseQuality() {

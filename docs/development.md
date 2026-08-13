@@ -84,8 +84,14 @@ Two things to know when adding tests:
 
 - `ImagePipeline` is a process-wide singleton, so reset it in `setUp`. `PhotoLibrary` can be
   instantiated directly.
-- The trash test skips itself (`XCTSkip`) if the environment has no usable Trash, rather than
-  failing the run.
+- The trash test probes `FileManager.trashItem` on a scratch file first and skips itself
+  (`XCTSkip`) if the environment has no usable Trash, rather than failing the run. Probe the
+  behaviour, never match on a status message: user-facing copy is not a test seam.
+- Anything with an escaping completion goes through `Fixtures.CompletionGate`, which closes when
+  the wait ends. Work that outlives its timeout would otherwise call `fulfill()` on a finished
+  test, and XCTest answers that by taking the whole process down.
+- Assert on pixels, not only on dimensions, when the decoder's orientation is involved: six of the
+  eight EXIF orientations leave the frame size untouched.
 
 For one-off exploration outside the suite, the source files can also be compiled directly against a
 throwaway `main.swift` (exclude `FujiViewerApp.swift`, which carries `@main`, and stub `enum Log`).
