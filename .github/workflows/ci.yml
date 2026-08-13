@@ -1,9 +1,15 @@
 name: CI
 
+# Prose changes nothing that compiles, and this workflow builds the universal app on every run —
+# macOS minutes bill at ten times the Linux rate. Workflow files stay in scope: they carry build
+# logic. A tag push runs the release workflow regardless of what it touches, so a release is never
+# skipped by anything here.
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
 
 # Nothing here writes to the repository; the release workflow asks for more where it needs it.
 permissions:
