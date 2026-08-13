@@ -5,13 +5,30 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repository; the release workflow asks for more where it needs it.
+permissions:
+  contents: read
+
+# Superseded runs are cancelled: macOS minutes bill at ten times the Linux rate, and on a branch
+# only the newest commit is worth building.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     name: Build and test
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      # The image default is Xcode 16.4, whose SwiftPM fails a multi-arch build of this package:
+      # `.swiftLanguageMode(.v5)` does not reach SWIFT_VERSION and the two slices collide on output
+      # paths. Pinning also keeps a release from being built by whatever Xcode the image defaults to
+      # that week. When the image drops this version the build fails loudly, which is the point.
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       - name: Toolchain
         run: swift --version
@@ -23,3 +40,38 @@ jobs:
       # photos of its own.
       - name: Test
         run: swift test
+
+  package:
+    name: Package the app
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The image default is Xcode 16.4, whose SwiftPM fails a multi-arch build of this package:
+      # `.swiftLanguageMode(.v5)` does not reach SWIFT_VERSION and the two slices collide on output
+      # paths. Pinning also keeps a release from being built by whatever Xcode the image defaults to
+      # that week. When the image drops this version the build fails loudly, which is the point.
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
+      # The same command a release runs, for the same reason: icon rendering, Info.plist assembly
+      # and codesign otherwise happen for the first time at tag push. Building it universal also
+      # keeps the x86_64 slice compiling on every pull request rather than only at a tag.
+      #
+      # What this does not do is run the tests as x86_64. Hosted runners are all Apple Silicon and
+      # the last Intel image predates the Swift 6 toolchain, and Rosetta is not a substitute: it
+      # translates instructions while ImageIO and VideoToolbox still follow the host's hardware,
+      # which is the axis this app's risk actually lives on. Intel runtime behaviour is covered by
+      # running the suite on an Intel machine, per the performance rule in CONTRIBUTING.md.
+      - name: Assemble FujiViewer.app
+        run: ./build-app.sh --universal
+
+      - name: Check both architectures are present
+        run: lipo FujiViewer.app/Contents/MacOS/FujiViewer -verify_arch x86_64 arm64
+
+      # codesign signs a bundle whose Info.plist does not parse, so the plist is checked too.
+      - name: Check the bundle
+        run: |
+          plutil -lint FujiViewer.app/Contents/Info.plist
+          codesign --verify --verbose FujiViewer.app
